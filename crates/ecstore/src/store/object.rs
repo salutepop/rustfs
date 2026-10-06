@@ -2798,10 +2798,16 @@ impl ECStore {
     /// bucket incarnation, and Object Lock configuration revision.
     pub async fn object_lock_config_snapshot(&self, bucket: &str) -> Result<Arc<ObjectLockConfigSnapshot>> {
         check_valid_bucket_name(bucket)?;
+        let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
         let lifecycle_guard = self.acquire_bucket_lifecycle_read_lock(bucket).await?;
+        rustfs_io_metrics::record_put_object_stage_duration_from("snapshot_lifecycle_lock", stage_start);
+        let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
         let metadata_guard = acquire_bucket_metadata_transaction_read_lock_in(&self.ctx, bucket).await?;
+        rustfs_io_metrics::record_put_object_stage_duration_from("snapshot_metadata_lock", stage_start);
+        let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
         let (state, bucket_incarnation_id, config_revision) =
             get_object_lock_config_and_incarnation_from_disk_in(&self.ctx, bucket).await?;
+        rustfs_io_metrics::record_put_object_stage_duration_from("snapshot_metadata_read", stage_start);
         if lifecycle_guard.is_lock_lost() || metadata_guard.is_lock_lost() {
             return Err(Error::other("bucket lifecycle lock was lost while loading the Object Lock snapshot"));
         }
@@ -4355,19 +4361,27 @@ impl ECStore {
         data: &mut PutObjReader,
         opts: &ObjectOptions,
     ) -> Result<(ObjectInfo, Option<OldCurrentSize>)> {
+        let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
         let (object, opts) = self.prepare_put_object(bucket, object, opts).await?;
+        rustfs_io_metrics::record_put_object_stage_duration_from("store_prepare_put", stage_start);
+        let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
         let idx = self
             .select_put_object_pool_idx(bucket, object.as_str(), data.size(), &opts)
             .await?;
+        rustfs_io_metrics::record_put_object_stage_duration_from("store_select_pool", stage_start);
         let mut opts = opts;
         if !self.single_pool() {
             opts.decommission_capacity_admission = crate::bucket::metadata_sys::object_store_if_initialized_in(&self.ctx).await;
         }
         let receipt_sink = install_tier_free_version_receipt_sink(&mut opts);
+        let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
         let result = self.pools[idx]
             .put_object_with_old_current_size(bucket, object.as_str(), data, &opts)
             .await;
+        rustfs_io_metrics::record_put_object_stage_duration_from("store_set_disk_put", stage_start);
+        let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
         enqueue_recorded_tier_free_versions(self, receipt_sink).await;
+        rustfs_io_metrics::record_put_object_stage_duration_from("store_enqueue_tier_receipts", stage_start);
         result
     }
 

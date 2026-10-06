@@ -4041,12 +4041,14 @@ impl SetDisks {
                 if let Some(expected_incarnation_id) = source_bucket_incarnation_id
                     && opts.bucket_lifecycle_lock_fence.is_none()
                 {
+                    let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
                     bucket_lifecycle_guard = Some(
                         metadata_sys::object_store_in(&self.ctx)
                             .await?
                             .acquire_bucket_incarnation_fence(bucket, expected_incarnation_id)
                             .await?,
                     );
+                    rustfs_io_metrics::record_put_object_stage_duration_from("put_commit_bucket_fence", stage_start);
                 }
                 if let Some(fence) = publication_fence.take() {
                     publication_commit_guard = Some(fence.into_commit_guard(self.pool_index, bucket, object).await?);
@@ -4257,7 +4259,9 @@ impl SetDisks {
                 None
             };
 
+            let stage_start = rustfs_io_metrics::put_stage_metrics_enabled().then(Instant::now);
             let quota_context = reservation::begin(&self.ctx, bucket, object, opts, self.pool_index, self.set_index).await?;
+            rustfs_io_metrics::record_put_object_stage_duration_from("put_commit_quota_begin", stage_start);
             let quota_mutation_fence = quota_context.is_enforced() || opts.quota_admission.is_some();
             let mut replication_quota_size = None;
 
